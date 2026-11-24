@@ -1,9 +1,9 @@
-import 'package:bilet_flow_event_admin_app/src/api.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../main.dart';
+import '../api.dart';
 import '../models.dart';
 import '../widgets.dart';
 
@@ -16,46 +16,50 @@ class EventPage extends ConsumerStatefulWidget {
 }
 
 class _EventPageState extends ConsumerState<EventPage> {
-  late Future<(AssignedEvent, CheckInCounts)> _overview;
+  late Future<AssignedEvent> _event;
+  late Future<CheckInCounts> _counts;
   late final ValueNotifier<int> _revision;
+
+  String get _path => '/events/${widget.eventId}';
 
   @override
   void initState() {
     super.initState();
-    _overview = _load();
+    _event = _loadEvent();
+    _counts = _loadCounts();
     _revision = ref.read(sessionProvider).checkInRevision;
-    _revision.addListener(_refresh);
+    _revision.addListener(_refreshCounts);
   }
 
   @override
   void dispose() {
-    _revision.removeListener(_refresh);
+    _revision.removeListener(_refreshCounts);
     super.dispose();
   }
 
-  Future<(AssignedEvent, CheckInCounts)> _load() async {
-    final api = ref.read(sessionProvider).api;
-    final results = await Future.wait<Object>([
-      api.assignedEvents(),
-      api.counts(widget.eventId),
-    ]);
-    final events = results[0] as List<AssignedEvent>;
+  Future<AssignedEvent> _loadEvent() async {
+    final events = await ref.read(sessionProvider).api.assignedEvents();
     final event = events.where((item) => item.id == widget.eventId).firstOrNull;
     if (event == null) {
-      throw ApiFailure('This event is no longer assigned to you.');
+      throw const ApiFailure('This event is no longer assigned to you.');
     }
-    return (event, results[1] as CheckInCounts);
+    return event;
   }
 
-  Future<void> _refresh() async {
-    final future = _load();
-    setState(() => _overview = future);
-    try {
-      await future;
-    } catch (_) {
-      /* The error view handles this. */
-    }
+  Future<CheckInCounts> _loadCounts() =>
+      ref.read(sessionProvider).api.counts(widget.eventId);
+
+  void _refreshCounts() {
+    final next = _loadCounts();
+    setState(() {
+      _counts = next;
+    });
   }
+
+  void _retryEvent() => setState(() {
+    _event = _loadEvent();
+    _counts = _loadCounts();
+  });
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -66,145 +70,157 @@ class _EventPageState extends ConsumerState<EventPage> {
         icon: const Icon(Icons.arrow_back),
         onPressed: () => context.go('/events'),
       ),
-      actions: [
-        IconButton(
-          tooltip: 'Refresh',
-          onPressed: _refresh,
-          icon: const Icon(Icons.refresh),
-        ),
-      ],
     ),
-    body: FutureBuilder<(AssignedEvent, CheckInCounts)>(
-      future: _overview,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState != ConnectionState.done)
-          return const Center(child: CircularProgressIndicator());
-        if (snapshot.hasError)
-          return PageNotice(
-            icon: Icons.error_outline,
-            title: 'Cannot open event',
-            message: readableError(snapshot.error!),
-            action: Column(
-              mainAxisSize: MainAxisSize.min,
+    body: FutureBuilder<CheckInCounts>(
+      future: _counts,
+      builder: (context, attendance) => FutureBuilder<AssignedEvent>(
+        future: _event,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState != ConnectionState.done) {
+            return const Center(
+              child: CircularProgressIndicator(semanticsLabel: 'Loading event'),
+            );
+          }
+          if (snapshot.hasError) {
+            return PageNotice(
+              icon: Icons.error_outline,
+              title: 'Cannot open event',
+              message: readableError(snapshot.error!),
+              action: FilledButton(
+                onPressed: _retryEvent,
+                child: const Text('Retry'),
+              ),
+            );
+          }
+          final event = snapshot.data!;
+          final theme = Theme.of(context);
+          final titleStyle = MediaQuery.sizeOf(context).width < 360
+              ? theme.textTheme.headlineSmall
+              : theme.textTheme.headlineLarge;
+          final start = event.startAt.toLocal();
+          final date = MaterialLocalizations.of(
+            context,
+          ).formatMediumDate(start);
+          final time = TimeOfDay.fromDateTime(start).format(context);
+          return PageWidth(
+            child: ListView(
+              padding: pagePadding,
               children: [
-                FilledButton(onPressed: _refresh, child: const Text('Retry')),
+                Text(
+                  event.title,
+                  style: titleStyle?.copyWith(fontWeight: FontWeight.w800),
+                ),
                 const SizedBox(height: 10),
-                OutlinedButton(
-                  onPressed: () => context.go('/events/${widget.eventId}/scan'),
-                  child: const Text('Open scanner'),
+                Text(
+                  [
+                    date,
+                    time,
+                    if (event.venueName?.trim().isNotEmpty ?? false)
+                      event.venueName!,
+                  ].join(' · '),
+                  style: theme.textTheme.bodyLarge?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 26),
+                FilledButton.icon(
+                  onPressed: () => context.go('$_path/scan'),
+                  icon: const Icon(Icons.qr_code_scanner),
+                  label: const Text('Scan ticket'),
+                ),
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: () => context.push('$_path/search'),
+                  icon: const Icon(Icons.search),
+                  label: const Text('Search attendees'),
+                ),
+                const SizedBox(height: 28),
+                _Attendance(
+                  counts: attendance.data,
+                  error: attendance.error,
+                  refreshing:
+                      attendance.connectionState != ConnectionState.done,
+                  onRefresh: _refreshCounts,
                 ),
               ],
             ),
           );
-        final (event, counts) = snapshot.data!;
-        final date = MaterialLocalizations.of(
-          context,
-        ).formatMediumDate(event.startAt.toLocal());
-        return RefreshIndicator(
-          onRefresh: _refresh,
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(18, 12, 18, 32),
-            children: [
-              Text(
-                event.title,
-                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                '$date${event.venueName == null ? '' : ' · ${event.venueName}'}',
-              ),
-              const SizedBox(height: 24),
-              Row(
-                children: [
-                  Expanded(
-                    child: _CountCard(
-                      label: 'Registered',
-                      count: counts.registered,
-                      icon: Icons.confirmation_number_outlined,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: _CountCard(
-                      label: 'Checked in',
-                      count: counts.checkedIn,
-                      icon: Icons.how_to_reg_outlined,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 24),
-              FilledButton.icon(
-                onPressed: () => context.go('/events/${widget.eventId}/scan'),
-                icon: const Icon(Icons.qr_code_scanner),
-                label: const Text('Scan ticket'),
-              ),
-              const SizedBox(height: 14),
-              OutlinedButton.icon(
-                onPressed: () =>
-                    context.push('/events/${widget.eventId}/search').then((_) {
-                      if (mounted) _refresh();
-                    }),
-                icon: const Icon(Icons.search),
-                label: const Text('Search attendees'),
-                style: OutlinedButton.styleFrom(
-                  minimumSize: const Size.fromHeight(54),
-                ),
-              ),
-              if (counts.registered == 0) ...[
-                const SizedBox(height: 24),
-                const Card(
-                  child: Padding(
-                    padding: EdgeInsets.all(18),
-                    child: Text(
-                      'No registrations yet. You can still scan a ticket or search when attendees arrive.',
-                    ),
-                  ),
-                ),
-              ],
-              const SizedBox(height: 24),
-              Text(
-                'Check-in requires a connection to the server.',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ],
-          ),
-        );
-      },
+        },
+      ),
     ),
   );
 }
 
-class _CountCard extends StatelessWidget {
-  const _CountCard({
-    required this.label,
-    required this.count,
-    required this.icon,
+class _Attendance extends StatelessWidget {
+  const _Attendance({
+    required this.counts,
+    required this.error,
+    required this.refreshing,
+    required this.onRefresh,
   });
-  final String label;
-  final int count;
-  final IconData icon;
+
+  final CheckInCounts? counts;
+  final Object? error;
+  final bool refreshing;
+  final VoidCallback onRefresh;
 
   @override
-  Widget build(BuildContext context) => Card(
-    child: Padding(
-      padding: const EdgeInsets.all(18),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, color: Theme.of(context).colorScheme.primary),
-          const SizedBox(height: 18),
-          Text(
-            '$count',
-            style: Theme.of(
-              context,
-            ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold),
-          ),
-          Text(label, style: Theme.of(context).textTheme.bodySmall),
-        ],
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final data = counts;
+    final numbers = MaterialLocalizations.of(context);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 12, 18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text('Attendance', style: theme.textTheme.titleMedium),
+                ),
+                IconButton(
+                  tooltip: 'Refresh attendance',
+                  onPressed: refreshing ? null : onRefresh,
+                  icon: const Icon(Icons.refresh),
+                ),
+              ],
+            ),
+            if (refreshing)
+              const LinearProgressIndicator(
+                semanticsLabel: 'Loading attendance',
+              ),
+            if (!refreshing && error != null)
+              InlineNotice(
+                message: 'Could not load attendance. ${readableError(error!)}',
+              ),
+            if (data != null) ...[
+              const SizedBox(height: 6),
+              if (data.registered == 0 && data.checkedIn == 0)
+                const Text('No registrations yet.')
+              else ...[
+                Text(
+                  '${numbers.formatDecimal(data.checkedIn)} of ${numbers.formatDecimal(data.registered)} checked in',
+                  style: theme.textTheme.titleLarge,
+                ),
+                if (data.registered > 0) ...[
+                  const SizedBox(height: 12),
+                  ExcludeSemantics(
+                    child: LinearProgressIndicator(
+                      minHeight: 6,
+                      borderRadius: BorderRadius.circular(3),
+                      value: (data.checkedIn / data.registered)
+                          .clamp(0.0, 1.0)
+                          .toDouble(),
+                    ),
+                  ),
+                ],
+              ],
+            ],
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }

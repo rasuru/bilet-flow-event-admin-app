@@ -16,6 +16,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   final _username = TextEditingController();
   final _password = TextEditingController();
   bool _busy = false;
+  bool _hidePassword = true;
   String? _error;
 
   @override
@@ -26,10 +27,15 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   }
 
   Future<void> _submit() async {
-    if (!_form.currentState!.validate() || _busy) return;
-    setState(() { _busy = true; _error = null; });
+    if (_busy || !_form.currentState!.validate()) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
     try {
-      await ref.read(sessionProvider).signIn(_username.text.trim(), _password.text);
+      await ref
+          .read(sessionProvider)
+          .signIn(_username.text.trim(), _password.text);
     } catch (error) {
       if (mounted) setState(() => _error = readableError(error));
     } finally {
@@ -38,48 +44,110 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    body: SafeArea(child: Center(child: SingleChildScrollView(
-      padding: const EdgeInsets.all(28),
-      child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 420), child: Form(
-        key: _form,
-        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Icon(Icons.confirmation_number_outlined, size: 54, color: Theme.of(context).colorScheme.primary),
-          const SizedBox(height: 22),
-          Text('BiletFlow', textAlign: TextAlign.center, style: Theme.of(context).textTheme.headlineLarge?.copyWith(fontWeight: FontWeight.bold)),
-          const SizedBox(height: 6),
-          Text('Event check-in', textAlign: TextAlign.center, style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 36),
-          TextFormField(
-            controller: _username,
-            textInputAction: TextInputAction.next,
-            autofillHints: const [AutofillHints.username],
-            decoration: const InputDecoration(labelText: 'Login', prefixIcon: Icon(Icons.person_outline)),
-            validator: (value) => value == null || value.trim().isEmpty ? 'Enter your login' : null,
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Scaffold(
+      body: SafeArea(
+        child: PageWidth(
+          maxWidth: 460,
+          child: SingleChildScrollView(
+            padding: pagePadding,
+            child: AutofillGroup(
+              child: Form(
+                key: _form,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.primary,
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.all(10),
+                            child: Icon(
+                              Icons.confirmation_number_outlined,
+                              color: theme.colorScheme.onPrimary,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Text('BiletFlow', style: theme.textTheme.titleMedium),
+                      ],
+                    ),
+                    const SizedBox(height: 28),
+                    Text(
+                      'Event check-in',
+                      style: theme.textTheme.headlineLarge,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Sign in to see the events assigned to you.',
+                      style: theme.textTheme.bodyLarge?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 28),
+                    TextFormField(
+                      controller: _username,
+                      readOnly: _busy,
+                      textInputAction: TextInputAction.next,
+                      autofillHints: const [AutofillHints.username],
+                      autocorrect: false,
+                      decoration: const InputDecoration(labelText: 'Login'),
+                      validator: (value) =>
+                          value == null || value.trim().isEmpty
+                          ? 'Enter your login'
+                          : null,
+                    ),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: _password,
+                      readOnly: _busy,
+                      obscureText: _hidePassword,
+                      onFieldSubmitted: (_) => _submit(),
+                      autofillHints: const [AutofillHints.password],
+                      decoration: InputDecoration(
+                        labelText: 'Password',
+                        suffixIcon: IconButton(
+                          tooltip: _hidePassword
+                              ? 'Show password'
+                              : 'Hide password',
+                          onPressed: () =>
+                              setState(() => _hidePassword = !_hidePassword),
+                          icon: Icon(
+                            _hidePassword
+                                ? Icons.visibility_outlined
+                                : Icons.visibility_off_outlined,
+                          ),
+                        ),
+                      ),
+                      validator: (value) => value == null || value.isEmpty
+                          ? 'Enter your password'
+                          : null,
+                    ),
+                    if (_error != null) ...[
+                      const SizedBox(height: 16),
+                      InlineNotice(message: _error!),
+                    ],
+                    const SizedBox(height: 24),
+                    FilledButton(
+                      onPressed: _busy ? null : _submit,
+                      child: Text(_busy ? 'Signing in…' : 'Sign in'),
+                    ),
+                    if (_busy)
+                      const LinearProgressIndicator(
+                        semanticsLabel: 'Signing in',
+                      ),
+                  ],
+                ),
+              ),
+            ),
           ),
-          const SizedBox(height: 14),
-          TextFormField(
-            controller: _password,
-            obscureText: true,
-            onFieldSubmitted: (_) => _submit(),
-            autofillHints: const [AutofillHints.password],
-            decoration: const InputDecoration(labelText: 'Password', prefixIcon: Icon(Icons.lock_outline)),
-            validator: (value) => value == null || value.isEmpty ? 'Enter your password' : null,
-          ),
-          if (_error != null) ...[
-            const SizedBox(height: 14),
-            Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
-          ],
-          const SizedBox(height: 24),
-          FilledButton(
-            onPressed: _busy ? null : _submit,
-            child: _busy ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('Sign in'),
-          ),
-          const SizedBox(height: 16),
-          Text('Use your BiletFlow account assigned to an event.', textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodySmall),
-        ]),
-      )),
-    ))),
-  );
+        ),
+      ),
+    );
+  }
 }

@@ -45,9 +45,17 @@ class TicketValidation {
 }
 
 class EventTicket {
-  const EventTicket({required this.id, required this.ticketCode, required this.attendeeEmail, required this.status, this.seatId});
+  const EventTicket({
+    required this.id,
+    required this.ticketCode,
+    required this.attendeeEmail,
+    required this.status,
+    this.seatId,
+    this.manualCode,
+  });
   final String id;
   final String ticketCode;
+  final String? manualCode;
   final String attendeeEmail;
   final String status;
   final String? seatId;
@@ -55,6 +63,7 @@ class EventTicket {
   factory EventTicket.fromJson(Map<String, dynamic> json) => EventTicket(
     id: json['id'] as String,
     ticketCode: json['ticketCode'] as String,
+    manualCode: json['manualCode'] as String?,
     attendeeEmail: json['attendeeEmail'] as String,
     status: json['status'] as String,
     seatId: json['seatId'] as String?,
@@ -75,3 +84,17 @@ String? ticketCodeFromInput(String value) {
   }
   return null;
 }
+
+final _shortTicketCode = RegExp(r'^[0-9A-HJKMNP-TV-Z]{8}$');
+
+String? shortTicketCodeFromInput(String input) {
+  final code = input
+      .toUpperCase()
+      .replaceAll(RegExp(r'[\s-]'), '')
+      .replaceAll('O', '0')
+      .replaceAll(RegExp('[IL]'), '1');
+  return _shortTicketCode.hasMatch(code) ? code : null;
+}
+
+String formatShortTicketCode(String code) =>
+    '${code.substring(0, 4)}-${code.substring(4)}';
